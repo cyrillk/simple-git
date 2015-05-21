@@ -72,20 +72,23 @@ def process_dir(path, dir, is_fetch, is_pull):
             if is_pull and repo.remotes and not git_dirty(repo):
                 git_pull(repo.remotes.origin, dir)
 
-            branch = git_branch(repo)
-            ahead = git_ahead(repo)
-            behind = git_behind(repo)
-            dirty = '-' if git_dirty(repo) else '+'
+            try:
+                branch = git_branch(repo)
+                ahead = git_ahead(repo)
+                behind = git_behind(repo)
+                dirty = '-' if git_dirty(repo) else '+'
 
-            state = ''
-            if ahead and behind:
-                state = '+' + str(ahead) + ' / ' + '-' + str(behind)
-            elif ahead and not behind:
-                state = '+' + str(ahead)
-            elif not ahead and behind:
-                state = '-' + str(behind)
+                state = ''
+                if ahead and behind:
+                    state = '+' + str(ahead) + ' / ' + '-' + str(behind)
+                elif ahead and not behind:
+                    state = '+' + str(ahead)
+                elif not ahead and behind:
+                    state = '-' + str(behind)
 
-            data = [dir, branch, dirty, state]
+                data = [dir, branch, dirty, state]
+            except Exception:
+                print('Failed to process for ' + dir)
         else:
             data = [dir, '', '', '']
     print('.')
@@ -116,18 +119,28 @@ def parse_args():
                         help='git fetch')
     parser.add_argument('-p', '--pull', action='store_true',
                         help='git pull')
-    parser.add_argument('path', nargs='?', help='local path')
+    parser.add_argument('path', nargs='?', help='local path', default='./')
     return parser.parse_args()
 
 
-args = parse_args()
-path = args.path if args.path else './'
-fetch = args.fetch
-pull = args.pull
+def main():
+    # command line arguments
+    args = parse_args()
+    path = args.path
+    fetch = args.fetch
+    pull = args.pull
 
-data = [process_dir(path, d, fetch, pull) for d in os.listdir(path)]
-data = filter((lambda q: q != []), data)
-data = map(paint_data, data)
-heads = paint(build_headers(), TerminalColours.HEADER)
+    # directory processing
+    data = [process_dir(path, d, fetch, pull) for d in os.listdir(path)]
+    data = filter((lambda q: q != []), data)
+    data = map(paint_data, data)
 
-print tabulate(data, headers=heads, tablefmt="orgtbl")
+    # headers created
+    heads = paint(build_headers(), TerminalColours.HEADER)
+
+    # output result
+    print tabulate(data, headers=heads, tablefmt="orgtbl")
+
+
+if __name__ == "__main__":
+    main()
