@@ -1,10 +1,12 @@
 #!/usr/bin/env python
 
-import argparse
+import os
 from tabulate import tabulate
+from git import Repo
+import argparse
 
 
-class bcolours:
+class TerminalColours:
     HEADER = '\033[95m'
     OKBLUE = '\033[94m'
     OKGREEN = '\033[92m'
@@ -20,71 +22,112 @@ def xstr(s):
 
 
 def paint(data, colour):
-    return [colour + xstr(s) + bcolours.ENDC for s in data]
+    return [colour + xstr(s) + TerminalColours.ENDC for s in data]
 
 
-def build_row(inst):
-    return [inst.id, inst.tags['Name'], inst.ip_address,
-            inst.public_dns_name, inst.vpc_id, inst.state]
+def git_fetch(origin, dir):
+    try:
+        origin.fetch()
+    except Exception:
+        print('Failed to fetch for ' + dir)
 
 
-def build_headers():
-    return ["ID", "NAME", "PUBLIC IP", "PUBLIC DNS", "VPC", "STATE"]
+def git_pull(origin, dir):
+    try:
+        origin.pull()
+    except Exception:
+        print('Failed to pull for ' + dir)
 
 
-def get_instances(profile):
-    reg = next(x for x in boto.ec2.regions() if x.name == 'eu-west-1')
-    conn = boto.ec2.EC2Connection(profile_name=profile, region=reg)
-    # conn = boto.ec2.EC2Connection(profile_name='heal')
-    # conn = boto.ec2.connect_to_region('eu-west-1')
-    # print conn
-    return conn.get_all_instances()
+def git_dirty(repo):
+    return repo.is_dirty(untracked_files=True)
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(description='Simple AWS EC2 grep')
-    parser.add_argument('-p', '--profile', nargs='?', help='aws profile')
-    parser.add_argument('search', nargs='+', help='search string')
-    return parser.parse_args()
+def git_branch(repo):
+    return str(repo.active_branch)
 
 
-def filter_instances(instances, search):
+def git_ahead(repo):
+    if repo.remotes:
+        branch = git_branch(repo)
+        return len(list(repo.iter_commits(branch + '@{u}..' + branch)))
+
+
+def git_behind(repo):
+    if repo.remotes:
+        branch = git_branch(repo)
+        return len(list(repo.iter_commits(branch + '..' + branch + '@{u}')))
+
+
+def process_dir(path, dir, is_fetch, is_pull):
     data = []
-    for res in instances:
-        for inst in res.instances:
-            count = len(data)
-            for key, val in inst.tags.iteritems():  # loop tags
-                for s in search:  # chech search strings
-                    if s in val:
-                        data.append(build_row(inst))
-                        break  # break if found
-                if count < len(data):
-                    break  # break if found
+    if os.path.isdir(path + dir):
+        git_path = path + dir + "/.git"
+        if os.path.isdir(git_path):  # is git repo
+            repo = Repo(git_path)
+
+            if is_fetch and repo.remotes:
+                git_fetch(repo.remotes.origin, dir)
+
+            if is_pull and repo.remotes and not git_dirty(repo):
+                git_pull(repo.remotes.origin, dir)
+
+            branch = git_branch(repo)
+            ahead = git_ahead(repo)
+            behind = git_behind(repo)
+            dirty = '-' if git_dirty(repo) else '+'
+
+            state = ''
+            if ahead and behind:
+                state = '+' + str(ahead) + ' / ' + '-' + str(behind)
+            elif ahead and not behind:
+                state = '+' + str(ahead)
+            elif not ahead and behind:
+                state = '-' + str(behind)
+
+            data = [dir, branch, dirty, state]
+        else:
+            data = [dir, '', '', '']
+    print('.')
     return data
 
 
 def paint_data(row):
-    if row[5] == 'stopped':
-        return paint(row, bcolours.FAIL)
-    elif row[5] == 'running' and row[4] is None:
-        return paint(row, bcolours.OKBLUE)
-    elif row[5] == 'running' and row[4] is not None:
-        return paint(row, bcolours.OKGREEN)
+    if row[2] == '+' and row[3]:
+        return paint(row, TerminalColours.UNDERLINE + TerminalColours.OKBLUE)
+    elif row[2] == '+' and not row[3]:
+        return paint(row, TerminalColours.OKBLUE)
+    elif row[2] == '-' and row[3]:
+        return paint(row, TerminalColours.UNDERLINE + TerminalColours.FAIL)
+    elif row[2] == '-' and not row[3]:
+        return paint(row, TerminalColours.FAIL)
+    elif not row[1]:
+        return paint(row, TerminalColours.OKGREEN)
     return row
 
 
-def prepare_data():
-    args = parse_args()
-    data = filter_instances(get_instances(args.profile), args.search)
-    sorted_data = sorted(data, key=lambda x: x[1])
-    return [paint_data(s) for s in sorted_data]
+def build_headers():
+    return ['NAME', 'BRANCH', 'CLEAN', 'STATE']
 
 
-def main():
-    data = prepare_data()
-    heads = paint(build_headers(), bcolours.HEADER)
-    print tabulate(data, headers=heads, tablefmt="orgtbl")
+def parse_args():
+    parser = argparse.ArgumentParser(description='Simple GIT table view')
+    parser.add_argument('-f', '--fetch', action='store_true',
+                        help='git fetch')
+    parser.add_argument('-p', '--pull', action='store_true',
+                        help='git pull')
+    parser.add_argument('path', nargs='?', help='local path')
+    return parser.parse_args()
 
 
-if __name__ == "__main__":
-    main()
+args = parse_args()
+path = args.path if args.path else './'
+fetch = args.fetch
+pull = args.pull
+
+data = [process_dir(path, d, fetch, pull) for d in os.listdir(path)]
+data = filter((lambda q: q != []), data)
+data = map(paint_data, data)
+heads = paint(build_headers(), TerminalColours.HEADER)
+
+print tabulate(data, headers=heads, tablefmt="orgtbl")
